@@ -21,10 +21,12 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
+from ryu.lib import mac as mac_lib
 
 
 class SimpleSwitch13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
+    DST_POINTER = 0
 
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
@@ -63,6 +65,21 @@ class SimpleSwitch13(app_manager.RyuApp):
                                     match=match, instructions=inst)
         datapath.send_msg(mod)
 
+    # TODO: Move to configuration file/ read from service discovery
+    def get_accel_list(self):
+        dst_list = [
+            {'name': 'accel',
+             'mac': '00:00:00:00:00:a1',
+             'ofport': 3},
+            {'name': 'accel2',
+             'mac': '00:00:00:00:00:b1',
+             'ofport': 4}
+        ]
+        return dst_list
+
+    def get_accel_ofports(self):
+        return map(lambda x: x['ofport'], self.get_accel_list())
+
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         # If you hit this you might want to increase
@@ -90,18 +107,42 @@ class SimpleSwitch13(app_manager.RyuApp):
 
         self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
+        # add destinations to learning table
+        if dpid not in self.mac_to_port:
+            for dst in self.get_accel_list():
+                mac = dst['mac']
+                port = dst['ofport']
+                self.mac_to_port[dpid][mac] = ofport
+
+        destination = None
+
+        # choose single destination per mac address
+        if (in_port not in self.get_accel_ofports() and
+                dst == mac_lib.BROADCAST_STR):
+            self.logger.info("Received BROADCAST %s %s %s %s",
+                             dpid, src, dst, in_port)
+            dst_list = self.get_accel_list()
+            destination = dst_list[self.DST_POINTER]
+            self.logger.info("Forwarding to destination %s %s %s",
+                             destination['name'],
+                             destination['mac'],
+                             destination['ofport'])
+            self.DST_POINTER = (self.DST_POINTER + 1) % len(dst_list)
+
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = in_port
 
         if dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
+        elif destination:
+            out_port = destination['ofport']
         else:
             out_port = ofproto.OFPP_FLOOD
 
         actions = [parser.OFPActionOutput(out_port)]
 
         # install a flow to avoid packet_in next time
-        if out_port != ofproto.OFPP_FLOOD:
+        if out_port != ofproto.OFPP_FLOOD and not destination:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
             # verify if we have a valid buffer_id, if yes avoid to send both
             # flow_mod & packet_out
