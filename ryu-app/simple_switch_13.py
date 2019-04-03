@@ -63,6 +63,7 @@ class SimpleSwitch13(app_manager.RyuApp):
         else:
             mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
                                     match=match, instructions=inst)
+        self.logger.info("OFPFlowMod: %s", mod)
         datapath.send_msg(mod)
 
     # TODO: Move to configuration file/ read from service discovery
