@@ -137,6 +137,9 @@ class SimpleSwitch13(app_manager.RyuApp):
             out_port = self.mac_to_port[dpid][dst]
         elif destination:
             out_port = destination['ofport']
+            match = parser.OFPMatch(in_port=in_port, eth_dst=mac_lib.BROADCAST_STR, eth_src=src)
+            actions = [parser.OFPActionOutput(out_port)]
+            self.add_flow(datapath, 1, match, actions, msg.buffer_id)
         else:
             out_port = ofproto.OFPP_FLOOD
 
